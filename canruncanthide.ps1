@@ -1,20 +1,57 @@
-
+#Created by: Aaron Rosenberg, 2023
+using assembly System.Windows.Forms
+using namespace System.Windows.Forms
+using namespace System.Drawing
+#https://stackoverflow.com/questions/60175542/powershell-textbox-placeholder
+$assemblies = "System.Windows.Forms", "System.Drawing"
+$code = @"
+using System.Drawing;
+using System.Windows.Forms;
+public class ExRichTextBox : RichTextBox
+{
+    string hint;
+    public string Hint
+    {
+        get { return hint; }
+        set { hint = value; this.Invalidate(); }
+    }
+    protected override void WndProc(ref Message m)
+    {
+        base.WndProc(ref m);
+        if (m.Msg == 0xf)
+        {
+            if (!this.Focused && string.IsNullOrEmpty(this.Text)
+                && !string.IsNullOrEmpty(this.Hint))
+            {
+                using (var g = this.CreateGraphics())
+                {
+                    TextRenderer.DrawText(g, this.Hint, this.Font,
+                        this.ClientRectangle, SystemColors.GrayText , this.BackColor, 
+                        TextFormatFlags.Top | TextFormatFlags.Left);
+                }
+            }
+        }
+    }
+}
+"@
+Add-Type -ReferencedAssemblies $assemblies -TypeDefinition $code -Language CSharp  
 Add-Type -AssemblyName System.Windows.Forms
 $Form1 = New-Object -TypeName System.Windows.Forms.Form
-$ADList = @("example1.dom", "example2.dom")
+$ADList = @("wintrust.wtfc", "wmortgage.wintrust.wtfc", "firstifc.wintrust.wtfc", "sales.wintrust.wtfc", "tricom.wintrust.wtfc")
 $global:userData = @{}
 
 #region Declaration
 [System.Windows.Forms.RadioButton]$CmpBtn = $null
 [System.Windows.Forms.RadioButton]$UserBtn = $null
 
-[System.Windows.Forms.TextBox]$SearchBox = $null # Renamed from $PCNameInput
+[ExRichTextBox]$SearchBox = $null # Renamed from $PCNameInput
 [System.Windows.Forms.Button]$SearchButton = $null
 [System.Windows.Forms.CheckBox]$EnforceNameLen = $null
 [System.Windows.Forms.ComboBox]$UserDropdown = $null
 [System.Windows.Forms.LinkLabel]$CmpNumberLabel = $null
 [System.Windows.Forms.Button]$OpenDriveButton = $null   
 [System.Windows.Forms.LinkLabel]$FQDNLabel = $null
+[System.Windows.Forms.Button]$MRCButton = $null
 [System.Windows.Forms.LinkLabel]$IPLabel = $null
 [System.Windows.Forms.CheckBox]$AutoCopyIP = $null
 [System.Windows.Forms.Label]$CmpOULabel = $null
@@ -35,9 +72,12 @@ $global:userData = @{}
 #region Listeners
 $UserBtn_CheckedChanged = {
     $EnforceNameLen.Visible = $false
+    $SearchBox.Hint = [System.String]'Enter Username'
 }
 $CmpBtn_CheckedChanged = {
     $EnforceNameLen.Visible = $true
+    $SearchBox.Hint = [System.String]'Enter Computer Name'
+
 }
 $SearchButton_Click = {
     # $Global:verifCmpNum = $null
@@ -85,7 +125,24 @@ $SearchButton_Click = {
 }
     #endregion Computer Search
 $OpenDriveButton_Click = {
+    if ($null -eq $global:userData['pcNum']) {
+        PopupMsg "No PC Selected" -msgTitle "No PC Selected" -iconType 16
+        return
+    }
     Invoke-Item -Path ("\\" + $global:userData['pcNum'] + "\c$") #change to $pcName when implemented
+}
+
+$MRCButton_Click = {
+    if ($null -eq $global:userData['pcNum']) {
+        PopupMsg "No PC Selected" -msgTitle "No PC Selected" -iconType 16
+    }
+    try {
+        & 'C:\Program Files\SolarWinds\DameWare Mini Remote Control x64\DWRCC.exe' -c: -h: -a:1 -m:$global:userData['IP']
+    }
+    catch {
+        PopupMsg "Unable to open MRC" -msgTitle "MRC Error" -iconType 16
+    
+}
 }
 $UserDropdown_SelectedIndexChanged = {
     QueryADUser $UserDropdown.SelectedItem
@@ -105,6 +162,7 @@ $OpenLockoutStatus_Click = {
     }catch{PopupMsg "Unable to Open LockoutStatus" -msgTitle "Unable to Open LockoutStatus" -iconType 16}
 }
 $SoftwareButton_Click = { Invoke-Item -path "\\pwscl01cohcm01.wintrust.wtfc\ServiceDesk"}
+$ConsoleButton_Click = {}
 #region Functions
 function PopupMsg { 
     param (
@@ -119,17 +177,23 @@ function UnlockUser {
     param (
         $user
     )
-    try{
-        $passwordServers = Get-ADGroupMember -server $global:userData['server'] "Domain Controllers" | Select-Object Name
-        foreach ($server in $passwordServers){
-            Unlock-ADAccount $user -server $server
-        }
-    }catch{
-        PopupMsg "Unable To Unlock" -msgTitle "Unlock Unsuccessful"
-    }
-
-}
-function QueryADCmp {
+            $passwordServers = Get-ADGroupMember -server $global:userData['server'] "Domain Controllers" | Select-Object -ExpandProperty Name
+            $unsuccessUnlocks = @()
+            foreach ($server in $passwordServers){
+                Try{
+                    Unlock-ADAccount $user -server $server -ErrorAction SilentlyContinue
+                }catch{
+                    $unsuccessUnlocks += $server
+                }
+            }
+            if ($unsuccessUnlocks.length -gt 0){
+                $failedStr = [String]::Join("`n", $unsuccessUnlocks)
+                PopupMsg $failedStr -msgTitle "Unlock Unsuccessful On:"
+            }else{
+                PopupMsg "Unlock Successful" -msgTitle "Unlock Successful" -iconType 64
+            }
+}    
+    function QueryADCmp {
     param($cmpNum)
     Import-Module ActiveDirectory
     foreach ($domain in $ADList) {
@@ -149,9 +213,11 @@ function GetUsers {
             QueryADUser $usernames
         }else{
                 $UserDropdown.Items.AddRange($usernames)
+                PopupMsg "Please Select User From Dropdown" -msgTitle "Multiple Users" -iconType 64
             }
     }catch {
         PopupMsg -Message "Cannot Get Users"
+        UpdateWindow -reset $true -user $true
     }
 }
 Function QueryADUser{
@@ -251,13 +317,14 @@ function InitializeComponent {
     #region Instantiate Objects
     $CmpBtn = (New-Object -TypeName System.Windows.Forms.RadioButton)
     $UserBtn = (New-Object -TypeName System.Windows.Forms.RadioButton)
-    $SearchBox = (New-Object -TypeName System.Windows.Forms.TextBox)
+    $SearchBox = (New-Object -TypeName ExRichTextBox)
     $SearchButton = (New-Object -TypeName System.Windows.Forms.Button)
     $EnforceNameLen = (New-Object -TypeName System.Windows.Forms.CheckBox)
     $UserDropdown = (New-Object -TypeName System.Windows.Forms.ComboBox)
     $CmpNumberLabel = (New-Object -TypeName System.Windows.Forms.LinkLabel)
     $OpenDriveButton = (New-Object -TypeName System.Windows.Forms.Button)
     $FQDNLabel = (New-Object -TypeName System.Windows.Forms.LinkLabel)
+    $MRCButton = (New-Object -TypeName System.Windows.Forms.Button)
     $IPLabel = (New-Object -TypeName System.Windows.Forms.LinkLabel)
     $AutoCopyIP = (New-Object -TypeName System.Windows.Forms.CheckBox)
     $CmpOULabel = (New-Object -TypeName System.Windows.Forms.Label)
@@ -328,6 +395,7 @@ function InitializeComponent {
     $SearchBox.Name = [System.String]'SearchBox'
     $SearchBox.Size = (New-Object -TypeName System.Drawing.Size -ArgumentList $SearchBox_Size)
     $SearchBox.TabIndex = [System.Int32]3
+    $SearchBox.Hint = [System.String]'Enter Computer Name'
     #endregion Search Box
     #region Search Button
     $SearchButton.Location = (New-Object -TypeName System.Drawing.Point -ArgumentList @([System.Int32]$SearchButton_X_Loc, [System.Int32]$Search_Y_Loc))
@@ -413,6 +481,12 @@ function InitializeComponent {
     $FQDNLabel.Font = (New-Object -TypeName System.Drawing.Font -ArgumentList $SecondLvl_Font)
     $FQDNLabel.add_Click($FQDNLabel_Click)
     #endregion FQDN
+    #MRC Button
+    $MRCButton.Location = (New-Object -TypeName System.Drawing.Point -ArgumentList @([System.Int32]$OpenDriveButton_X_Loc, [System.Int32]$FQDNLabel_Y_Loc))
+    $MRCButton.Name = [System.String]'MRCButton'
+    $MRCButton.Size = (New-Object -TypeName System.Drawing.Size -ArgumentList $OpenDriveButton_Size)
+    $MRCButton.Text = [System.String]'Remote Into'
+    $MRCButton.add_Click($MRCButton_Click)
     #region IP
     $IPLabel.Location = (New-Object -TypeName System.Drawing.Point -ArgumentList $FirstLvl_X_Loc, $IPLabel_Y_Loc)
     $IPLabel.Name = [System.String]'IPLabel'
@@ -506,6 +580,7 @@ function InitializeComponent {
     $Form1.Controls.Add($CmpNumberLabel)
     $Form1.Controls.Add($OpenDriveButton)
     $Form1.Controls.Add($FQDNLabel)
+    $Form1.Controls.Add($MRCButton)
     $Form1.Controls.Add($IPLabel)
     $Form1.Controls.Add($AutoCopyIP)
     $Form1.Controls.Add($CmpOULabel)
@@ -534,6 +609,7 @@ function InitializeComponent {
     Add-Member -InputObject $Form1 -Name CmpNumberLabel -Value $CmpNumberLabel -MemberType NoteProperty
     Add-Member -InputObject $Form1 -Name OpenDriveButton -Value $OpenDriveButton -MemberType NoteProperty
     Add-Member -InputObject $Form1 -Name FQDNLabel -Value $FQDNLabel -MemberType NoteProperty
+    Add-Member -InputObject $Form1 -Name MRCButton -Value $MRCButton -MemberType NoteProperty
     Add-Member -InputObject $Form1 -Name IPLabel -Value $IPLabel -MemberType NoteProperty
     Add-Member -InputObject $Form1 -Name AutoCopyIP -Value $AutoCopyIP -MemberType NoteProperty
     Add-Member -InputObject $Form1 -Name CmpOULabel -Value $CmpOULabel -MemberType NoteProperty
