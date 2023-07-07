@@ -37,7 +37,7 @@ public class ExRichTextBox : RichTextBox
 Add-Type -ReferencedAssemblies $assemblies -TypeDefinition $code -Language CSharp  
 Add-Type -AssemblyName System.Windows.Forms
 $Form1 = New-Object -TypeName System.Windows.Forms.Form
-$ADList = @("wintrust.wtfc", "wmortgage.wintrust.wtfc", "firstifc.wintrust.wtfc", "sales.wintrust.wtfc", "tricom.wintrust.wtfc")
+$ADList = @("example1.dom", "example2.dom", "example3.dom")
 $global:userData = @{}
 
 #region Declaration
@@ -57,13 +57,15 @@ $global:userData = @{}
 [System.Windows.Forms.Label]$CmpOULabel = $null
 [System.Windows.Forms.Label]$NameLabel = $null
 [System.Windows.Forms.LinkLabel]$UsernameLabel = $null
-[System.Windows.Forms.Button]$ADButton = $null
+[System.Windows.Forms.Button]$DeployFixButton = $null
 [System.Windows.Forms.Label]$UptimeLabel = $null
 [System.Windows.Forms.Label]$LockedLabel = $null
 [System.Windows.Forms.Button]$UnlockButton = $null
 [System.Windows.Forms.LinkLabel]$OpenLockoutStatus = $null
 [System.Windows.Forms.Label]$UserOULabel = $null
 [System.Windows.Forms.Button]$SoftwareButton = $null
+[System.Windows.Forms.ToolTip]$ToolTipMain = $null
+[System.ComponentModel.IContainer]$components = $null
 
 
 #endregion Declartion
@@ -81,6 +83,77 @@ $CmpBtn_CheckedChanged = {
 }
 $SearchButton_Click = {
     # $Global:verifCmpNum = $null
+    SearchForPC
+}
+$SearchBox_EnterPressed = {
+    if ($_.KeyCode -eq 'Enter') {
+    SearchForPC
+    }
+}
+    #endregion Computer Search
+$OpenDriveButton_Click = {
+    if ($null -eq $global:userData['pcNum']) {
+        PopupMsg "No PC Selected" -msgTitle "No PC Selected" -iconType 16
+        return
+    }
+    Invoke-Item -Path ("\\" + $global:userData['pcNum'] + "\c$") #change to $pcName when implemented
+}
+
+$MRCButton_Click = {
+    #https://documentation.solarwinds.com/en/success_center/dameware/content/cli_functionality.htm
+    if ($null -eq $global:userData['pcNum']) {
+        PopupMsg "No PC Selected" -msgTitle "No PC Selected" -iconType 16
+    }
+    try{try {
+        & 'C:\Program Files\SolarWinds\DameWare Mini Remote Control x64\DWRCC.exe' -c: -h: -a:1 -m:$global:userData['IP']
+    }catch{
+        & 'C:\Program Files\SolarWinds\DameWare Mini Remote Control x64 #1\DWRCC.exe' -c: -h: -a:1 -m:$global:userData['IP'] # server 7 has messed up dameware folder
+    }}
+    catch {
+        PopupMsg "Unable to open MRC" -msgTitle "Unable to open MRC" -iconType 16
+    }
+}
+$UserDropdown_SelectedIndexChanged = {
+    QueryADUser $UserDropdown.SelectedItem
+    UpdateWindow -user $true
+}
+#endregion Listeners
+$CmpNumberLabel_Click = { Set-Clipboard -Value $global:userData['pcNum']}
+$FQDNLabel_Click = {Set-Clipboard -Value $global:userData['FQDN']}
+$IPLabel_Click = {Set-Clipboard -Value $global:userData['ip']}
+$UsernameLabel_Click = {Set-Clipboard -Value $global:userData['username']}
+$DeployFixButton_Click = { DeployFix }
+$UnlockButton_Click = { UnlockUser $global:userData['username']}
+$OpenLockoutStatus_Click = {
+    try{
+        $fullName = $global:userData['username'] + "@" + $global:userData['server']
+        C:\Software\LockoutStatus.exe -u:$fullName
+    }catch{PopupMsg "Unable to Open LockoutStatus" -msgTitle "Unable to Open LockoutStatus" -iconType 16}
+}
+$SoftwareButton_Click = { Invoke-Item -path "{NETWORK SOFTWARE FOLDER}"}
+$ConsoleButton_Click = {}
+#region Functions
+$DeployFixButton_ToolTip = [System.String]'Deploys the selected fix to the selected PC' #UPDATE: on fix change
+function DeployFix { # Remember to change Tooltip and Button Text when the fix changes
+    try {
+        $tokenBroker = Get-WmiObject -Class Win32_Service -ComputerName $cmpName -Filter "Name='TokenBroker'"
+        $clickToRun = Get-WmiObject -Class Win32_Service -ComputerName $cmpName -Filter "Name='ClickToRunSvc'"
+        $tokenBroker.StopService()
+        $clickToRun.StopService()
+        Set-Location \\$cmpName\c$\users\$userName\appdata\local\Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\AC\TokenBroker\Accounts
+        Remove-Item -force -recurse *
+        Set-Location \\$cmpName\c$\users\$userName\appdata\local\Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\Settings
+        Set-Location \\$cmpName\c$\users\$userName\appdata\local\Packages\Microsoft.AAD.BrokerPlugin_cw5n1h2txyewy\Settings
+        Rename-Item -Path settings.dat -NewName settings.dat.bak
+        $tokenBroker.StartService()
+        $clickToRun.StartService()
+        PopupMsg "Fix Deployed" -msgTitle "Fix Deployed" -iconType 64
+    }
+    catch {
+        PopupMsg "Unable to Deploy Fix" -msgTitle "Unable to Deploy Fix" -iconType 16
+    }
+}
+function SearchForPC {
     $searchTerm = $SearchBox.Text.Trim()
     $nameLen = $searchTerm.length
     if ($nameLen -eq 0) {
@@ -121,49 +194,7 @@ $SearchButton_Click = {
         QueryADUser $searchTerm
         UpdateWindow -user $true
     }
-
 }
-    #endregion Computer Search
-$OpenDriveButton_Click = {
-    if ($null -eq $global:userData['pcNum']) {
-        PopupMsg "No PC Selected" -msgTitle "No PC Selected" -iconType 16
-        return
-    }
-    Invoke-Item -Path ("\\" + $global:userData['pcNum'] + "\c$") #change to $pcName when implemented
-}
-
-$MRCButton_Click = {
-    if ($null -eq $global:userData['pcNum']) {
-        PopupMsg "No PC Selected" -msgTitle "No PC Selected" -iconType 16
-    }
-    try {
-        & 'C:\Program Files\SolarWinds\DameWare Mini Remote Control x64\DWRCC.exe' -c: -h: -a:1 -m:$global:userData['IP']
-    }
-    catch {
-        PopupMsg "Unable to open MRC" -msgTitle "MRC Error" -iconType 16
-    
-}
-}
-$UserDropdown_SelectedIndexChanged = {
-    QueryADUser $UserDropdown.SelectedItem
-    UpdateWindow -user $true
-}
-#endregion Listeners
-$CmpNumberLabel_Click = { Set-Clipboard -Value $global:userData['pcNum']}
-$FQDNLabel_Click = {Set-Clipboard -Value $global:userData['FQDN']}
-$IPLabel_Click = {Set-Clipboard -Value $global:userData['ip']}
-$UsernameLabel_Click = {Set-Clipboard -Value $global:userData['username']}
-$ADButton_Click = { PopupMsg "AD not yet implemented" }
-$UnlockButton_Click = { UnlockUser $global:userData['username']}
-$OpenLockoutStatus_Click = {
-    try{
-        $fullName = $global:userData['username'] + "@" + $global:userData['server']
-        C:\Software\LockoutStatus.exe -u:$fullName
-    }catch{PopupMsg "Unable to Open LockoutStatus" -msgTitle "Unable to Open LockoutStatus" -iconType 16}
-}
-$SoftwareButton_Click = { Invoke-Item -path "\\pwscl01cohcm01.wintrust.wtfc\ServiceDesk"}
-$ConsoleButton_Click = {}
-#region Functions
 function PopupMsg { 
     param (
         [Parameter(Position = 0, mandatory = $true)]$Message,
@@ -301,20 +332,14 @@ function UpdateWindow {
 function InitializeComponent {
     #region Resources
     $resources = & { $BinaryFormatter = New-Object -TypeName System.Runtime.Serialization.Formatters.Binary.BinaryFormatter
-        @{ 
-            '$this.Name'        = 'Form1'
-            'UserBtn.Name'      = 'UserBtn'
-            'CmpBtn.Name'       = 'CmpBtn'
-            'SearchButton.Name' = 'SearchButton'
-            'SearchBox.Name'    = 'SearchBox'
-            'UnlockButton.Name' = 'UnlockButton'
-        }
+        @{}
     }
     #endregion Resources
 
 
 
     #region Instantiate Objects
+    $components = (New-Object -TypeName System.ComponentModel.Container)
     $CmpBtn = (New-Object -TypeName System.Windows.Forms.RadioButton)
     $UserBtn = (New-Object -TypeName System.Windows.Forms.RadioButton)
     $SearchBox = (New-Object -TypeName ExRichTextBox)
@@ -330,13 +355,15 @@ function InitializeComponent {
     $CmpOULabel = (New-Object -TypeName System.Windows.Forms.Label)
     $NameLabel = (New-Object -TypeName System.Windows.Forms.Label)
     $UsernameLabel = (New-Object -TypeName System.Windows.Forms.LinkLabel)
-    $ADButton = (New-Object -TypeName System.Windows.Forms.Button)
+    $DeployFixButton = (New-Object -TypeName System.Windows.Forms.Button)
     $UptimeLabel = (New-Object -TypeName System.Windows.Forms.Label)
     $LockedLabel = (New-Object -TypeName System.Windows.Forms.Label)
     $UnlockButton = (New-Object -TypeName System.Windows.Forms.Button)
     $OpenLockoutStatus = (New-Object -TypeName System.Windows.Forms.LinkLabel)
     $UserOULabel = (New-Object -TypeName System.Windows.Forms.Label)
     $SoftwareButton = (New-Object -TypeName System.Windows.Forms.Button)
+    $ToolTipMain = (New-Object -TypeName System.Windows.Forms.ToolTip -ArgumentList @($components))
+
     
 
     #endregion Instantiate Objects
@@ -381,6 +408,7 @@ function InitializeComponent {
     $SearchButton_Size = @(75, 22)
     $EnforceNameLen_Size = @(100, 20)
     $Dropdown_Size = @(170, 20)
+    $DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
     #endregion Size
     #region Location
     $Search_Y_Loc = 9
@@ -396,6 +424,9 @@ function InitializeComponent {
     $SearchBox.Size = (New-Object -TypeName System.Drawing.Size -ArgumentList $SearchBox_Size)
     $SearchBox.TabIndex = [System.Int32]3
     $SearchBox.Hint = [System.String]'Enter Computer Name'
+    $SearchBox.Multiline = $false
+    $SearchBox.add_KeyDown($SearchBox_EnterPressed)
+
     #endregion Search Box
     #region Search Button
     $SearchButton.Location = (New-Object -TypeName System.Drawing.Point -ArgumentList @([System.Int32]$SearchButton_X_Loc, [System.Int32]$Search_Y_Loc))
@@ -421,6 +452,7 @@ function InitializeComponent {
     $UserDropdown.Location = (New-Object -TypeName System.Drawing.Point -ArgumentList @([System.Int32]$Dropdown_X_Loc, [System.Int32]37))
     $UserDropdown.Name = [System.String]'UserDropdown'
     $UserDropdown.Size = (New-Object -TypeName System.Drawing.Size -ArgumentList $Dropdown_Size)
+    $UserDropdown.DropDownStyle = $DropDownStyle
     $UserDropdown.add_SelectedIndexChanged($UserDropdown_SelectedIndexChanged)
     #endregion User Dropdown
     #endregion Search
@@ -431,13 +463,13 @@ function InitializeComponent {
 
     $AutoCopyIP_Size = @(100, 20)
     $OU_Size = @(250, 40)
-    $ADButton_Size = @(100, 20)
+    $DeployFixButton_Size = @(100, 40)
     $UnlockButton_Size = @(100, 20)
     $OpenLockoutStatus_Size = @(100, 20)
     $FirstLvl_Size = @(300, 20)
     $SecondLvl_Size = @(250, 20)
     $OpenDriveButton_Size = @(100, 20)
-    $SoftwareButton_Size = @(140, 20)
+    $SoftwareButton_Size = @(150, 20)
     #region Location
     $Results_Start_Y_Loc = 50 + $EnforceNameLen_Y_Loc + $EnforceNameLen_Size[1]
     $FirstLvl_X_Loc = 10
@@ -450,7 +482,7 @@ function InitializeComponent {
     $CmpOULabel_Y_Loc = $UptimeLabel_Y_Loc + $FirstLvl_Size[1] + $btn_spacing
     $NameLabel_Y_Loc = $CmpOULabel_Y_Loc + $OU_Size[1] + $btn_spacing
     $UsernameLabel_Y_Loc = $NameLabel_Y_Loc + $FirstLvl_Size[1] + $btn_spacing
-    $ADButton_X_Loc = $Form_Size[0] - $ADButton_Size[0] - $FirstLvl_X_Loc
+    $DeployFixButton_X_Loc = $Form_Size[0] - $DeployFixButton_Size[0] - $FirstLvl_X_Loc
     $LockedLabel_Y_Loc = $UsernameLabel_Y_Loc + $FirstLvl_Size[1] + $btn_spacing
     $UnlockButton_X_Loc = $Form_Size[0] - $UnlockButton_Size[0] - $FirstLvl_X_Loc
     $OpenLockoutStatus_X_Loc = $Form_Size[0] - $OpenLockoutStatus_Size[0] - $FirstLvl_X_Loc 
@@ -458,6 +490,8 @@ function InitializeComponent {
     $UserOULabel_Y_Loc = $LockedLabel_Y_Loc + $FirstLvl_Size[1] + $btn_spacing
     $SoftwareButton_X_Loc = $Form_Size[0] - $SoftwareButton_Size[0] - $FirstLvl_X_Loc
     $SoftwareButton_Y_Loc = $Form_Size[1] - $SoftwareButton_Size[1] - $btn_spacing
+
+    $currentFixName = [System.String]'M365 TokenBroker Fix'
     #endregion Location
     #endregion Properties
     #region Computer Number
@@ -520,11 +554,11 @@ function InitializeComponent {
     $UsernameLabel.Font = (New-Object -TypeName System.Drawing.Font -ArgumentList $FirstLvl_Font)
     $UsernameLabel.add_Click($UsernameLabel_Click)
 
-    $ADButton.Location = (New-Object -TypeName System.Drawing.Point -ArgumentList $ADButton_X_Loc, $UsernameLabel_Y_Loc)
-    $ADButton.Size = (New-Object -TypeName System.Drawing.Size -ArgumentList $ADButton_Size)
-    $ADButton.Text = [System.String]'AD Profile'
-    $ADButton.Name = [System.String]'ADButton'
-    $ADButton.add_Click($ADButton_Click)
+    $DeployFixButton.Location = (New-Object -TypeName System.Drawing.Point -ArgumentList $DeployFixButton_X_Loc, $NameLabel_Y_Loc)
+    $DeployFixButton.Size = (New-Object -TypeName System.Drawing.Size -ArgumentList $DeployFixButton_Size)
+    $DeployFixButton.Text = $currentFixName
+    $DeployFixButton.Name = [System.String]'DeployFixButton'
+    $DeployFixButton.add_Click($DeployFixButton_Click)
 
 
 
@@ -552,14 +586,35 @@ function InitializeComponent {
             
     $SoftwareButton.Location = (New-Object -TypeName System.Drawing.Point -ArgumentList $SoftwareButton_X_Loc, $SoftwareButton_Y_Loc)
     $SoftwareButton.Size = (New-Object -TypeName System.Drawing.Size -ArgumentList $SoftwareButton_Size)
-    $SoftwareButton.Text = [System.String]'Open Software Folder'
+    $SoftwareButton.Text = [System.String]'Open ServiceDesk Folder'
     $SoftwareButton.Name = [System.String]'SoftwareButton'
     $SoftwareButton.add_Click($SoftwareButton_Click)
     $SoftwareButton.Anchor = [System.Windows.Forms.AnchorStyles]([System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right)
     #endregion User Info
     #endregion Results
     #endregion Form Properties
+    #region Tooltips
+    $EnforceNameLength_ToolTip = [System.String]"Enforce a 10 Char length for the PC name"
+    $OpenDriveButton_ToolTip = [System.String]"Open the selected PC's C: drive in Explorer"
+    $MRCButton_ToolTip = [System.String]'Remote into the Selected PC'
+    $AutoCopyIP_ToolTip = [System.String]"Automatically copy the IP address `nto the clipboard when a PC is searched for"
+    $UnlockButton_ToolTip = [System.String]'Attempts to Unlock the selected user account through AD'
+    $OpenLockoutStatus_ToolTip = [System.String]'Opens a Lockout Status window with the selected user account'
+    $SoftwareButton_ToolTip = [System.String]'Opens the Network ServiceDesk Folder'
+    $ToolTips = @()
+    # foreach($tooltip in $ToolTips){
+    #     if $tooltip.length -gt 40{}
+    # }
+    $ToolTipMain.SetToolTip($MRCButton, $MRCButton_ToolTip)
+    $ToolTipMain.SetToolTip($AutoCopyIP, $AutoCopyIP_ToolTip)
+    $ToolTipMain.SetToolTip($EnforceNameLen, $EnforceNameLength_ToolTip)
+    $ToolTipMain.SetToolTip($OpenDriveButton, $OpenDriveButton_ToolTip)
+    $ToolTipMain.SetToolTip($UnlockButton, $UnlockButton_ToolTip)
+    $ToolTipMain.SetToolTip($OpenLockoutStatus, $OpenLockoutStatus_ToolTip)
+    $ToolTipMain.SetToolTip($SoftwareButton, $SoftwareButton_ToolTip)
+    $ToolTipMain.SetToolTip($DeployFixButton, $DeployFixButton_ToolTip)
 
+    #endregion Tooltips
     #region Test Values
 
     #endregion Test Values
@@ -586,7 +641,7 @@ function InitializeComponent {
     $Form1.Controls.Add($CmpOULabel)
     $Form1.Controls.Add($NameLabel)
     $Form1.Controls.Add($UsernameLabel)
-    # $Form1.Controls.Add($ADButton)
+    $Form1.Controls.Add($DeployFixButton)
     $Form1.Controls.Add($UptimeLabel)
     $Form1.Controls.Add($LockedLabel)
     $Form1.Controls.Add($UnlockButton)
@@ -615,13 +670,16 @@ function InitializeComponent {
     Add-Member -InputObject $Form1 -Name CmpOULabel -Value $CmpOULabel -MemberType NoteProperty
     Add-Member -InputObject $Form1 -Name NameLabel -Value $NameLabel -MemberType NoteProperty
     Add-Member -InputObject $Form1 -Name UsernameLabel -Value $UsernameLabel -MemberType NoteProperty
-    # Add-Member -InputObject $Form1 -Name ADButton -Value $ADButton -MemberType NoteProperty
+    Add-Member -InputObject $Form1 -Name DeployFixButton -Value $DeployFixButton -MemberType NoteProperty
     Add-Member -InputObject $Form1 -Name UptimeLabel -Value $UptimeLabel -MemberType NoteProperty
     Add-Member -InputObject $Form1 -Name LockedLabel -Value $LockedLabel -MemberType NoteProperty
     Add-Member -InputObject $Form1 -Name UnlockButton -Value $UnlockButton -MemberType NoteProperty
     Add-Member -InputObject $Form1 -Name OpenLockoutStatus -Value $OpenLockoutStatus -MemberType NoteProperty
     Add-Member -InputObject $Form1 -Name UserOULabel -Value $UserOULabel -MemberType NoteProperty
     Add-Member -InputObject $Form1 -Name SoftwareButton -Value $SoftwareButton -MemberType NoteProperty
+    Add-Member -InputObject $Form1 -Name ToolTipMain -Value $ToolTipMain -MemberType NoteProperty
+    Add-Member -InputObject $Form1 -Name components -Value $components -MemberType NoteProperty
+
     #endregion Add-Members
 }
 #endregion Add-Members
